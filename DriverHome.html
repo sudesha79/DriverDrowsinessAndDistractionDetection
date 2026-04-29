@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Driver Monitor</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.6.1/socket.io.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@700;800&display=swap" rel="stylesheet"/>
+<style>
+  :root {
+    --bg:        #0b0c0f;
+    --surface:   #13151a;
+    --border:    #1e2130;
+    --accent:    #e84141;
+    --accent2:   #f5a623;
+    --accent3:   #3ecf8e;
+    --accent4:   #7b61ff;
+    --accent5:   #ff6b35;
+    --text:      #e8e9ed;
+    --muted:     #5a5f72;
+    --font-head: 'Syne', sans-serif;
+    --font-body: 'DM Mono', monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--font-body); font-size: 13px; min-height: 100vh; }
+
+  .topbar { display:flex; align-items:center; justify-content:space-between; padding:18px 32px; border-bottom:1px solid var(--border); background:var(--surface); position:sticky; top:0; z-index:100; }
+  .topbar-brand { font-family:var(--font-head); font-size:20px; font-weight:800; letter-spacing:-0.5px; color:var(--text); }
+  .topbar-brand span { color:var(--accent); }
+  .topbar-right { display:flex; align-items:center; gap:16px; }
+  .driver-chip { display:flex; align-items:center; gap:8px; padding:6px 14px; border:1px solid var(--border); border-radius:999px; font-size:12px; color:var(--muted); }
+  .driver-chip .dot { width:7px; height:7px; border-radius:50%; background:var(--accent3); box-shadow:0 0 8px var(--accent3); animation:pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+  .btn-stop { padding:7px 18px; background:var(--accent); color:#fff; border:none; border-radius:6px; font-family:var(--font-body); font-size:12px; cursor:pointer; letter-spacing:0.04em; transition:opacity .2s; }
+  .btn-stop:hover { opacity:0.8; }
+
+  .page { display:grid; grid-template-columns:360px 1fr; min-height:calc(100vh - 61px); }
+
+  .panel-left { border-right:1px solid var(--border); padding:20px 18px; display:flex; flex-direction:column; gap:18px; overflow-y:auto; }
+
+  .section-label { font-size:10px; letter-spacing:.12em; color:var(--muted); text-transform:uppercase; margin-bottom:10px; }
+
+  /* video */
+  .video-wrapper { position:relative; border-radius:12px; overflow:hidden; background:#000; aspect-ratio:4/3; border:1px solid var(--border); }
+  #videoFeed { width:100%; height:100%; object-fit:cover; display:block; }
+  #feedPlaceholder { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; color:var(--muted); font-size:12px; background:#0b0c0f; }
+  .cam-icon { font-size:28px; opacity:0.3; }
+  .rec-badge { position:absolute; top:10px; left:10px; display:none; align-items:center; gap:6px; background:rgba(0,0,0,0.65); backdrop-filter:blur(4px); padding:4px 10px; border-radius:999px; font-size:10px; letter-spacing:.08em; color:var(--accent); }
+  .rec-badge.visible { display:flex; }
+  .rec-dot { width:6px; height:6px; border-radius:50%; background:var(--accent); animation:pulse 1s ease-in-out infinite; }
+  .fps-badge { position:absolute; top:10px; right:10px; display:none; background:rgba(0,0,0,0.65); backdrop-filter:blur(4px); padding:4px 10px; border-radius:999px; font-size:10px; color:var(--accent3); }
+  .fps-badge.visible { display:block; }
+
+  /* status cards */
+  .status-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .status-card { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:14px 12px; transition:border-color .3s, background .3s; }
+  .status-card.full-width { grid-column:span 2; }
+  .status-card.alert-active { border-color:var(--accent); background:rgba(232,65,65,0.05); }
+  .status-card .label { font-size:10px; color:var(--muted); letter-spacing:.06em; margin-bottom:6px; }
+  .status-card .value { font-size:18px; font-family:var(--font-head); font-weight:700; }
+  .status-card .value.safe   { color:var(--accent3); }
+  .status-card .value.danger { color:var(--accent);  }
+
+  /* risk */
+  .risk-meter { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:14px; }
+  .risk-bar-bg { height:8px; background:var(--border); border-radius:4px; margin:10px 0 6px; overflow:hidden; }
+  .risk-bar-fill { height:100%; border-radius:4px; transition:width .6s ease, background .6s ease; }
+  .risk-row { display:flex; justify-content:space-between; align-items:center; }
+  .risk-value { font-family:var(--font-head); font-size:22px; font-weight:700; }
+
+  /* alert feed */
+  .alert-feed { display:flex; flex-direction:column; gap:7px; overflow-y:auto; max-height:260px; }
+  .alert-item { display:flex; align-items:flex-start; gap:10px; padding:9px 12px; border-radius:8px; background:var(--surface); border:1px solid var(--border); border-left-width:3px; animation:slideIn .25s ease; }
+  @keyframes slideIn { from{opacity:0;transform:translateY(-6px)} to{opacity:1;transform:none} }
+  .alert-item.drowsy     { border-left-color:var(--accent);  }
+  .alert-item.yawning    { border-left-color:var(--accent2); }
+  .alert-item.phone      { border-left-color:var(--accent4); }
+  .alert-item.smoking    { border-left-color:var(--accent5); }
+  .alert-item.distracted { border-left-color:#e879f9; }
+  .alert-dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; margin-top:4px; }
+  .alert-item.drowsy .alert-dot     { background:var(--accent);  }
+  .alert-item.yawning .alert-dot    { background:var(--accent2); }
+  .alert-item.phone .alert-dot      { background:var(--accent4); }
+  .alert-item.smoking .alert-dot    { background:var(--accent5); }
+  .alert-item.distracted .alert-dot { background:#e879f9; }
+  .alert-body .alert-type { font-weight:500; font-size:12px; text-transform:capitalize; }
+  .alert-body .alert-meta { font-size:11px; color:var(--muted); margin-top:2px; }
+  .alert-empty { color:var(--muted); font-size:12px; text-align:center; padding:24px 0; }
+
+  /* right panel */
+  .panel-right { padding:20px 24px; display:flex; flex-direction:column; gap:20px; overflow-y:auto; }
+  .chart-card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:18px 20px; }
+  .chart-title { font-family:var(--font-head); font-size:14px; font-weight:700; margin-bottom:14px; color:var(--text); }
+  .charts-row { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+
+  .sessions-table { width:100%; border-collapse:collapse; }
+  .sessions-table th { text-align:left; font-size:10px; letter-spacing:.1em; color:var(--muted); padding:0 12px 10px; text-transform:uppercase; }
+  .sessions-table td { padding:10px 12px; font-size:12px; border-top:1px solid var(--border); color:var(--text); }
+  .sessions-table tr:hover td { background:rgba(255,255,255,0.02); }
+  .risk-pill { display:inline-block; padding:2px 10px; border-radius:999px; font-size:11px; font-weight:500; }
+  .risk-pill.low  { background:rgba(62,207,142,.15);  color:var(--accent3); }
+  .risk-pill.med  { background:rgba(245,166,35,.15);   color:var(--accent2); }
+  .risk-pill.high { background:rgba(232,65,65,.15);    color:var(--accent);  }
+
+  .flash-overlay { position:fixed; inset:0; pointer-events:none; z-index:999; opacity:0; transition:opacity .1s; background:rgba(232,65,65,0.07); }
+  .flash-overlay.flash { opacity:1; }
+  ::-webkit-scrollbar { width:4px; }
+  ::-webkit-scrollbar-track { background:transparent; }
+  ::-webkit-scrollbar-thumb { background:var(--border); border-radius:4px; }
+</style>
+</head>
+<body>
+
+<div class="flash-overlay" id="flashOverlay"></div>
+
+<div class="topbar">
+  <div class="topbar-brand">DRIVE<span>SAFE</span></div>
+  <div class="topbar-right">
+    <div class="driver-chip"><div class="dot"></div><span id="driverName">Driver</span></div>
+    <button class="btn-stop" onclick="stopSession()">&#9632; Stop Session</button>
+  </div>
+</div>
+
+<div class="page">
+
+  <!-- LEFT -->
+  <div class="panel-left">
+
+    <div>
+      <div class="section-label">Live Camera Feed</div>
+      <div class="video-wrapper">
+        <img id="videoFeed" src="" alt=""/>
+        <div id="feedPlaceholder">
+          <div class="cam-icon">&#128247;</div>
+          <span>Connecting to camera...</span>
+        </div>
+        <div class="rec-badge" id="recBadge"><div class="rec-dot"></div>LIVE</div>
+        <div class="fps-badge" id="fpsBadge">-- fps</div>
+      </div>
+    </div>
+
+    <!-- 5 cards: drowsy | yawning | phone | smoking | distracted (full width) -->
+    <div>
+      <div class="section-label">Live Status</div>
+      <div class="status-grid">
+        <div class="status-card" id="card-drowsy">
+          <div class="label">Drowsiness</div>
+          <div class="value safe" id="val-drowsy">OK</div>
+        </div>
+        <div class="status-card" id="card-yawning">
+          <div class="label">Yawning</div>
+          <div class="value safe" id="val-yawning">OK</div>
+        </div>
+        <div class="status-card" id="card-phone">
+          <div class="label">Phone Usage</div>
+          <div class="value safe" id="val-phone">OK</div>
+        </div>
+        <div class="status-card" id="card-smoking">
+          <div class="label">Smoking</div>
+          <div class="value safe" id="val-smoking">OK</div>
+        </div>
+        <div class="status-card full-width" id="card-distracted">
+          <div class="label">Distracted / Head Drop</div>
+          <div class="value safe" id="val-distracted">OK</div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="section-label">Session Risk</div>
+      <div class="risk-meter">
+        <div class="risk-row">
+          <span style="color:var(--muted);font-size:11px">Risk score</span>
+          <span class="risk-value" id="riskScore">0</span>
+        </div>
+        <div class="risk-bar-bg">
+          <div class="risk-bar-fill" id="riskBar" style="width:0%;background:var(--accent3)"></div>
+        </div>
+        <div class="risk-row">
+          <span style="color:var(--muted);font-size:10px">LOW</span>
+          <span style="color:var(--muted);font-size:10px">HIGH</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="flex:1;min-height:0">
+      <div class="section-label">Alert Feed</div>
+      <div class="alert-feed" id="alertFeed">
+        <div class="alert-empty">No alerts yet — drive safe!</div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- RIGHT -->
+  <div class="panel-right">
+
+    <div class="charts-row">
+      <div class="chart-card">
+        <div class="chart-title">Event Breakdown</div>
+        <canvas id="chartBreakdown" height="200"></canvas>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">Risk Score History</div>
+        <canvas id="chartRisk" height="200"></canvas>
+      </div>
+    </div>
+
+    <div class="chart-card">
+      <div class="chart-title">Session History</div>
+      <table class="sessions-table">
+        <thead>
+          <tr>
+            <th>Session ID</th><th>Start Time</th><th>Duration</th><th>Risk Score</th>
+          </tr>
+        </thead>
+        <tbody id="sessionsBody">
+          <tr><td colspan="4" style="color:var(--muted);text-align:center;padding:20px">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const socket = io();
+
+let riskScore   = 0;
+let frameCount  = 0;
+let lastFpsTime = Date.now();
+const cardTimeouts = {};
+
+// ── smoking replaces head_pose ────────────────────────────────────────────────
+const RISK_WEIGHTS = { drowsy:10, yawning:5, phone:8, smoking:7, distracted:6 };
+
+// ── Charts ────────────────────────────────────────────────────────────────────
+Chart.defaults.color       = '#5a5f72';
+Chart.defaults.font.family = 'DM Mono';
+
+// index: 0=Drowsy 1=Yawning 2=Phone 3=Smoking 4=Distracted
+const breakdownChart = new Chart(document.getElementById('chartBreakdown'), {
+  type: 'bar',
+  data: {
+    labels: ['Drowsy','Yawning','Phone','Smoking','Distracted'],
+    datasets: [{
+      data: [0,0,0,0,0],
+      backgroundColor: ['#e84141','#f5a623','#7b61ff','#ff6b35','#e879f9'],
+      borderRadius: 6,
+      borderSkipped: false
+    }]
+  },
+  options: {
+    responsive: true,
+    plugins: { legend:{ display:false } },
+    scales: {
+      x: { grid:{ color:'#1e2130' }, ticks:{ font:{ size:10 } } },
+      y: { grid:{ color:'#1e2130' }, ticks:{ font:{ size:10 }, stepSize:1 }, beginAtZero:true }
+    }
+  }
+});
+
+const riskChart = new Chart(document.getElementById('chartRisk'), {
+  type: 'line',
+  data: { labels:[], datasets:[{ label:'Risk Score', data:[], borderColor:'#e84141', backgroundColor:'rgba(232,65,65,0.08)', tension:0.4, fill:true, pointRadius:4, pointBackgroundColor:'#e84141', pointBorderColor:'#0b0c0f', pointBorderWidth:2 }] },
+  options: {
+    responsive: true,
+    plugins: { legend:{ display:false } },
+    scales: {
+      x: { grid:{ color:'#1e2130' }, ticks:{ font:{ size:10 } } },
+      y: { grid:{ color:'#1e2130' }, ticks:{ font:{ size:10 } }, beginAtZero:true }
+    }
+  }
+});
+
+// ── Video stream ──────────────────────────────────────────────────────────────
+socket.on('video_frame', function(data) {
+  const img         = document.getElementById('videoFeed');
+  const placeholder = document.getElementById('feedPlaceholder');
+  const recBadge    = document.getElementById('recBadge');
+  const fpsBadge    = document.getElementById('fpsBadge');
+  img.src = 'data:image/jpeg;base64,' + data.data;
+  if (placeholder.style.display !== 'none') {
+    placeholder.style.display = 'none';
+    recBadge.classList.add('visible');
+    fpsBadge.classList.add('visible');
+  }
+  frameCount++;
+  const now = Date.now();
+  if (now - lastFpsTime >= 1000) {
+    fpsBadge.textContent = frameCount + ' fps';
+    frameCount = 0; lastFpsTime = now;
+  }
+});
+
+// ── Alert ─────────────────────────────────────────────────────────────────────
+socket.on('alert', function(data) {
+  addAlertToFeed(data);
+  flashCard(data.type);
+  flashScreen();
+  updateRisk(data.type);
+  updateBreakdownChart(data.type);
+  playBeep();
+});
+
+function addAlertToFeed(data) {
+  const feed  = document.getElementById('alertFeed');
+  const empty = feed.querySelector('.alert-empty');
+  if (empty) empty.remove();
+  const time  = new Date(data.timestamp).toLocaleTimeString();
+  const conf  = Math.round(data.confidence * 100);
+  const label = data.type.replace(/_/g, ' ');
+  const item  = document.createElement('div');
+  item.className = 'alert-item ' + data.type;
+  item.innerHTML = '<div class="alert-dot"></div><div class="alert-body"><div class="alert-type">' + label + '</div><div class="alert-meta">' + time + ' &nbsp;·&nbsp; ' + conf + '% confidence</div></div>';
+  feed.insertBefore(item, feed.firstChild);
+  while (feed.children.length > 40) feed.removeChild(feed.lastChild);
+}
+
+function flashCard(type) {
+  const card = document.getElementById('card-' + type);
+  const val  = document.getElementById('val-' + type);
+  if (!card || !val) return;
+  val.textContent = 'ALERT';
+  val.className   = 'value danger';
+  card.classList.add('alert-active');
+  clearTimeout(cardTimeouts[type]);
+  cardTimeouts[type] = setTimeout(function() {
+    val.textContent = 'OK';
+    val.className   = 'value safe';
+    card.classList.remove('alert-active');
+  }, 5000);
+}
+
+function flashScreen() {
+  const el = document.getElementById('flashOverlay');
+  el.classList.add('flash');
+  setTimeout(function() { el.classList.remove('flash'); }, 300);
+}
+
+function updateRisk(type) {
+  riskScore += (RISK_WEIGHTS[type] || 3);
+  const pct = Math.min(riskScore, 200) / 200 * 100;
+  const bar = document.getElementById('riskBar');
+  document.getElementById('riskScore').textContent = riskScore;
+  bar.style.width      = pct + '%';
+  bar.style.background = pct < 30 ? '#3ecf8e' : pct < 60 ? '#f5a623' : '#e84141';
+}
+
+function updateBreakdownChart(type) {
+  // smoking=3, distracted=4  (head_pose removed)
+  const idx = { drowsy:0, yawning:1, phone:2, smoking:3, distracted:4 }[type];
+  if (idx !== undefined) {
+    breakdownChart.data.datasets[0].data[idx]++;
+    breakdownChart.update('none');
+  }
+}
+
+function playBeep() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.frequency.value = 880;
+    gain.gain.setValueAtTime(0.3, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+    osc.start(); osc.stop(ctx.currentTime + 0.4);
+  } catch(e) {}
+}
+
+// ── Analytics ─────────────────────────────────────────────────────────────────
+async function loadAnalytics() {
+  try {
+    const [sessions, summary] = await Promise.all([
+      fetch('/api/sessions').then(r => r.json()),
+      fetch('/api/analytics/summary').then(r => r.json())
+    ]);
+    renderSessionsTable(sessions);
+    renderRiskChart(sessions);
+    // smoking=3, head_pose no longer in map
+    const map = { drowsy:0, yawning:1, phone:2, smoking:3, distracted:4 };
+    summary.forEach(function(row) {
+      const idx = map[row.event_type];
+      if (idx !== undefined) breakdownChart.data.datasets[0].data[idx] = row.type_count;
+    });
+    breakdownChart.update();
+  } catch(e) { console.error('Analytics error:', e); }
+}
+
+function renderSessionsTable(sessions) {
+  const tbody = document.getElementById('sessionsBody');
+  if (!sessions || !sessions.length) {
+    tbody.innerHTML = '<tr><td colspan="4" style="color:var(--muted);text-align:center;padding:20px">No previous sessions found</td></tr>';
+    return;
+  }
+  tbody.innerHTML = sessions.map(function(s) {
+    const start    = s.start_time ? new Date(s.start_time).toLocaleString() : '—';
+    const duration = (s.start_time && s.end_time)
+      ? Math.round((new Date(s.end_time) - new Date(s.start_time)) / 60000) + ' min'
+      : '<span style="color:var(--accent3)">Active</span>';
+    const score = Math.round(s.risk_score || 0);
+    const cls   = score < 20 ? 'low' : score < 60 ? 'med' : 'high';
+    return '<tr><td style="color:var(--muted)">#' + s.id + '</td><td>' + start + '</td><td>' + duration + '</td><td><span class="risk-pill ' + cls + '">' + score + '</span></td></tr>';
+  }).join('');
+}
+
+function renderRiskChart(sessions) {
+  if (!sessions || !sessions.length) return;
+  const rev = sessions.slice().reverse();
+  riskChart.data.labels           = rev.map(function(s){ return '#' + s.id; });
+  riskChart.data.datasets[0].data = rev.map(function(s){ return Math.round(s.risk_score || 0); });
+  riskChart.update();
+}
+
+async function stopSession() {
+  try { await fetch('/stop_session', { method:'POST' }); } catch(e) {}
+  window.location.href = '/DriverLogin';
+}
+<!-- Geolocation -->
+// ── Geolocation — runs after socket is defined ────────────────────────────────
+if (navigator.geolocation) {
+  navigator.geolocation.getCurrentPosition(function(pos) {
+    const lat = pos.coords.latitude;
+    const lon = pos.coords.longitude;
+
+    // Emit coords immediately via existing socket
+    socket.emit('location_update', { lat: lat, lon: lon });
+
+    // Show location chip in topbar
+    const chip = document.getElementById('locationChip');
+    const text = document.getElementById('locationText');
+    if (chip) chip.style.display = 'flex';
+    if (text) text.textContent = lat.toFixed(4) + ', ' + lon.toFixed(4);
+
+    // Reverse geocode → human-readable name
+    fetch('https://nominatim.openstreetmap.org/reverse?format=json&lat=' + lat + '&lon=' + lon)
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        const addr  = data.address || {};
+        const place = addr.suburb || addr.village || addr.town || addr.city || addr.county || '';
+        const state = addr.state || '';
+        const label = place && state ? place + ', ' + state : data.display_name.split(',')[0];
+        if (text) text.textContent = label;
+        // Send readable label to backend
+        socket.emit('location_update', { lat: lat, lon: lon, label: label });
+      })
+      .catch(function() {});
+
+  }, function(err) {
+    console.warn('Geolocation error:', err.message);
+  }, { timeout: 8000 });
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+loadAnalytics();
+setInterval(function() {
+  fetch('/api/sessions').then(r => r.json()).then(function(s){ renderSessionsTable(s); renderRiskChart(s); }).catch(function(){});
+}, 30000);
+</script>
+</body>
+</html>
